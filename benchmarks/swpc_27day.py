@@ -33,8 +33,9 @@ import common
 MONTHS = {m: i + 1 for i, m in enumerate(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
 
 
-def parse_pdf(path):
-    """-> (issue_date, {target_date: flux}) or raises."""
+def parse_pdf(path, with_ap=False):
+    """-> (issue_date, {target_date: flux}) or raises.
+    with_ap=True gives {target_date: (flux, Ap)} instead."""
     doc = fitz.open(path)
     txt = "\n".join(p.get_text() for p in doc)
     m = re.search(r"SWPC PRF \d+\s+(\d{1,2}) (\w+) (\d{4})", txt)
@@ -49,7 +50,8 @@ def parse_pdf(path):
     while k < len(lines) and len(out) < 27:
         dm = re.fullmatch(r"(\d{1,2})(?:\s+[A-Za-z]{3})?", lines[k])
         if dm and k + 3 < len(lines) and all(re.fullmatch(r"-?\d+", lines[k + q]) for q in (1, 2, 3)):
-            out[by_dom[int(dm.group(1))]] = float(lines[k + 1])
+            flux, ap = float(lines[k + 1]), float(lines[k + 2])
+            out[by_dom[int(dm.group(1))]] = (flux, ap) if with_ap else flux
             k += 4
         else:
             k += 1
