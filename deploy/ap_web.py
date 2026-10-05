@@ -2,7 +2,9 @@
 """Ap website views -> deploy/web_ap/ (published by deploy/f107_daily.sh).
 
   forecast.json   observed daily Ap (last 183 days) + the newest issued Ap
-                  forecast (point forecast and q05..q95)
+                  forecast (point forecast and q05..q95) + every percentile
+                  1..99 of that forecast (`percentiles`), for the Swift
+                  re-entry calculation's sampled paths
   hindcast.json   the forecast the frozen model gives from every origin since
                   2024-01-01 (data it was never trained or tuned on), computed
                   from today's data archive, + the band and the observed
@@ -30,6 +32,7 @@ OUT = os.path.join(ROOT, "deploy", "web_ap")
 DAYS = 183  # trailing ~6 months; the page pans through it
 HINDCAST_START = "2024-01-01"
 BAND_QS = [5, 25, 75, 95]  # the two shaded ranges the page draws
+PCTS = list(range(1, 100))  # every percentile of the newest forecast
 
 
 def write(name, obj):
@@ -48,9 +51,15 @@ def main():
     now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     os.makedirs(OUT, exist_ok=True)
     df = S.load_table()
+    models, meta = S.load_models()
+    times, resid = S.error_record(df, models)
 
+    # the newest issued forecast, plus every percentile of it, built from the
+    # issued point forecast the way ap/predict.py builds q05..q95
     fc = pd.read_csv(os.path.join(S.FORECASTS, "latest.csv"))
-    since = pd.Timestamp(fc.origin[0]) - pd.Timedelta(days=DAYS - 1)
+    t = pd.Timestamp(fc.origin[0])
+    pct = S.apply_band(fc.ap.to_numpy(), S.band_quantiles(times, resid, t, qs=PCTS))
+    since = t - pd.Timedelta(days=DAYS - 1)
     write("forecast.json", {
         "generated_utc": now,
         "origin": str(fc.origin[0]),
@@ -60,12 +69,12 @@ def main():
         "forecast": {"t": fc.target_date.astype(str).tolist(),
                      **{k: fc[k].round(1).tolist()
                         for k in ["ap", "q05", "q10", "q25", "q50", "q75", "q90", "q95"]}},
+        # percentiles.ap[i] is the forecast at percentile levels[i], one value per day
+        "percentiles": {"levels": PCTS, "ap": np.round(pct, 1).tolist()},
     })
 
-    models, meta = S.load_models()
     orig = S.valid_origins(df, HINDCAST_START, "2099-12-31", need_truth=False)
     P = S.predict(models, S.feature_rows(df, orig))
-    times, resid = S.error_record(df, models)
     qi = [S.QS.index(q) for q in BAND_QS]
     first = pd.Series(orig, index=orig.to_period("M")).groupby(level=0).first()
     band = []

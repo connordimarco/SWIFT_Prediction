@@ -3,6 +3,8 @@
 
   forecast.json   observed daily F10.7 (last 183 days, measured days only)
                   + the newest issued forecast (point forecast and q05..q95)
+                  + every percentile 1..99 of that forecast (`percentiles`),
+                  for the Swift re-entry calculation's sampled paths
   hindcast.json   the forecast the frozen model gives from every origin since
                   2024-01-01 (data it was never trained or tuned on), computed
                   from today's data archive, + the band and the observed
@@ -33,6 +35,7 @@ OUT = os.path.join(ROOT, "deploy", "web")
 DAYS = 183  # trailing ~6 months; the page pans through it
 HINDCAST_START = "2024-01-01"
 BAND_QS = [5, 25, 75, 95]  # the two shaded ranges the page draws
+PCTS = list(range(1, 100))  # every percentile of the newest forecast
 
 
 def write(name, obj):
@@ -52,8 +55,18 @@ def main():
     now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     os.makedirs(OUT, exist_ok=True)
 
+    df = e24.load_table()
+    models, meta = e24.load_models()
+    record = e24.error_record(df, models)
+
+    # the newest issued forecast, plus every percentile of it: the issued
+    # point forecast times exp(band quantile), as realtime/predict.py does
+    # for q05..q95
     fc = pd.read_csv(os.path.join(ROOT, "realtime", "forecasts", "latest.csv"))
-    since = (pd.Timestamp(fc.origin[0]) - pd.Timedelta(days=DAYS - 1)).strftime("%Y-%m-%d")
+    t = pd.Timestamp(fc.origin[0])
+    level_t = e24.envelope(df).loc[pd.DatetimeIndex([t])].to_numpy()[0]
+    pct = fc.f107.to_numpy() * np.exp(e24.band_quantiles(*record, t, level_t, qs=PCTS))
+    since = (t - pd.Timedelta(days=DAYS - 1)).strftime("%Y-%m-%d")
     write("forecast.json", {
         "generated_utc": now,
         "origin": str(fc.origin[0]),
@@ -63,15 +76,14 @@ def main():
         "forecast": {"t": fc.target_date.astype(str).tolist(),
                      **{k: fc[k].round(1).tolist()
                         for k in ["f107", "q05", "q10", "q25", "q50", "q75", "q90", "q95"]}},
+        # percentiles.f107[i] is the forecast at percentile levels[i], one value per day
+        "percentiles": {"levels": PCTS, "f107": np.round(pct, 1).tolist()},
     })
 
-    df = e24.load_table()
-    models, meta = e24.load_models()
     orig = e24.valid_origins(df, HINDCAST_START, "2099-12-31", need_truth=False)
     X = e24.feature_rows(df, orig)
     env = e24.envelope(df).loc[orig].to_numpy()
     P = e24.to_obs(e24.predict_adj(models, X, env), orig)
-    record = e24.error_record(df, models)
     qi = [e24.QS.index(q) for q in BAND_QS]
     months = orig.to_period("M")
     bands, level = [], np.empty(len(orig), dtype=int)

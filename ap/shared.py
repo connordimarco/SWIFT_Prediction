@@ -110,8 +110,8 @@ def error_record(df, models):
     return np.concatenate([z["times"], orig.to_numpy()]), np.vstack([z["resid"], R])
 
 
-def band_quantiles(times, resid, t):
-    """(len(QS), 30) log-ratio quantiles for an origin t, from the forecasts
+def band_quantiles(times, resid, t, qs=QS):
+    """(len(qs), 30) log-ratio quantiles for an origin t, from the forecasts
     issued in (t - 11 years, t - 30 days] — the ones fully observed by t."""
     times = np.asarray(times, dtype="datetime64[ns]")
     t = pd.Timestamp(t)
@@ -120,7 +120,7 @@ def band_quantiles(times, resid, t):
     if i1 - i0 < MIN_RECORD:
         i0 = 0
     assert i1 - i0 >= MIN_RECORD, f"no error record before {t.date()} to build a band from"
-    return np.nanpercentile(resid[i0:i1], QS, axis=0)
+    return np.nanpercentile(resid[i0:i1], qs, axis=0)
 
 
 def apply_band(p, q):

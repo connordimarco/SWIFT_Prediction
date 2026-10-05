@@ -139,9 +139,9 @@ def error_record(df, models):
     return times, resid, envelope(df).reindex(pd.DatetimeIndex(times)).to_numpy()
 
 
-def band_table(times, resid, level, t):
+def band_table(times, resid, level, t, qs=QS):
     """Band quantiles for an origin t at every flux level -> edges (LEVEL_BINS - 1,),
-    Q (LEVEL_BINS, len(QS), 30). Built from every forecast issued up to
+    Q (LEVEL_BINS, len(qs), 30). Built from every forecast issued up to
     t - 30 days (the ones fully observed by t), split at the quantiles of
     their 81-day flux level; bin b holds levels in [edges[b-1], edges[b])."""
     times = np.asarray(times, dtype="datetime64[ns]")
@@ -149,13 +149,13 @@ def band_table(times, resid, level, t):
     assert i1 >= MIN_RECORD * LEVEL_BINS, f"no error record before {pd.Timestamp(t).date()} to build a band from"
     edges = np.quantile(level[:i1], np.linspace(0, 1, LEVEL_BINS + 1)[1:-1])
     bins = np.digitize(level[:i1], edges)
-    return edges, np.stack([np.nanpercentile(resid[:i1][bins == b], QS, axis=0) for b in range(LEVEL_BINS)])
+    return edges, np.stack([np.nanpercentile(resid[:i1][bins == b], qs, axis=0) for b in range(LEVEL_BINS)])
 
 
-def band_quantiles(times, resid, level, t, level_t):
-    """(len(QS), 30) log-ratio quantiles for an origin t whose 81-day flux
+def band_quantiles(times, resid, level, t, level_t, qs=QS):
+    """(len(qs), 30) log-ratio quantiles for an origin t whose 81-day flux
     level is level_t. Multiply the forecast by exp() of these for the band."""
-    edges, Q = band_table(times, resid, level, t)
+    edges, Q = band_table(times, resid, level, t, qs)
     return Q[np.digitize(level_t, edges)]
 
 

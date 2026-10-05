@@ -44,9 +44,12 @@ fi
 nice $PY scripts/build_ap.py; ap_data=$?
 (cd ap && nice ../$PY predict.py); ap_predict=$?
 nice $PY deploy/ap_web.py; ap_web=$?
+# percentile paths for the Swift re-entry ensemble, from both indices' past
+# forecast errors; written into deploy/web_ap/ so the Ap publish carries it.
+nice $PY deploy/percentile_paths.py; paths=$?
 ap_pub=skip
 if [ $ap_web -eq 0 ] && [ -n "${AP_PUBLISH_DEST:-}" ]; then
     ap_pub=$(publish deploy/web_ap/ "$AP_PUBLISH_DEST")
 fi
 echo "$(date -u +%FT%TZ) DONE refresh=$refresh predict=$predict web=$web swpc=$swpc pub=$pub latest=$(sed -n 2p realtime/forecasts/latest.csv | cut -d, -f1)" \
-     "ap_data=$ap_data ap_predict=$ap_predict ap_web=$ap_web ap_pub=$ap_pub ap_latest=$(sed -n 2p ap/forecasts/latest.csv | cut -d, -f1)"
+     "ap_data=$ap_data ap_predict=$ap_predict ap_web=$ap_web paths=$paths ap_pub=$ap_pub ap_latest=$(sed -n 2p ap/forecasts/latest.csv | cut -d, -f1)"
