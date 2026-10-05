@@ -5,6 +5,7 @@ CLAUDE.md
 __pycache__/
 archive/
 deploy/web/
+deploy/web_ap/
 deploy/local.env
 deploy/daily.log
 deploy/.lock
