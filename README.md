@@ -17,6 +17,12 @@ far-side detections; the target is the ratio of future flux to the current
 operational 27-day outlook on 125 matched issues, 28.6 vs 32.1 sfu (−11%),
 32.2 vs 37.3 on days ≥150 sfu (−14%).
 
+The band is multiplicative and depends on how active the Sun is: it comes
+from the model's earlier out-of-sample errors at a similar 81-day flux level.
+On the test years, each forecast's 90 / 80 / 50% bands, built from earlier
+forecasts only, hold 91.1 / 81.9 / 49.5% of days (details and limits in
+`realtime/README.md`).
+
 - `scripts/` — rebuild `data/` from the raw archives (`fetch_raw.sh` →
   `parse_srs.py` → `build_dataset.py`; `fetch_farside.py` →
   `build_farside_daily.py`). Endpoints and archives: `data/SOURCES.md`.

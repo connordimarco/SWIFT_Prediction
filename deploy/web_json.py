@@ -5,8 +5,17 @@
                   + the newest issued forecast (point forecast and q05..q95)
   hindcast.json   the forecast the frozen model gives from every origin since
                   2024-01-01 (data it was never trained or tuned on), computed
-                  from today's data archive, + the per-lead band and the
-                  observed series, so the page can draw any start date
+                  from today's data archive, + the band and the observed
+                  series, so the page can draw any start date
+
+The band of an issued forecast is refitted for every origin on the earlier
+forecast errors at its 81-day flux level, one of six (e24.band_quantiles).
+hindcast.json stores one table per month, that of the month's first origin,
+as log-ratio quantiles per level (`bands[m].qNN[level][lead]`), plus each
+origin's level index (`level`): the page draws
+forecast * exp(bands[month].qNN[level[i]][lead]). `band` keeps the older
+per-lead layout, filled with the newest origin's band, for pages that have
+not switched yet.
 """
 import datetime as dt
 import json
@@ -23,6 +32,7 @@ import e24  # noqa: E402
 OUT = os.path.join(ROOT, "deploy", "web")
 DAYS = 183  # trailing ~6 months; the page pans through it
 HINDCAST_START = "2024-01-01"
+BAND_QS = [5, 25, 75, 95]  # the two shaded ranges the page draws
 
 
 def write(name, obj):
@@ -61,17 +71,28 @@ def main():
     X = e24.feature_rows(df, orig)
     env = e24.envelope(df).loc[orig].to_numpy()
     P = e24.to_obs(e24.predict_adj(models, X, env), orig)
-    band = json.load(open(os.path.join(e24.MODELS, "band.json")))["band"]
+    record = e24.error_record(df, models)
+    qi = [e24.QS.index(q) for q in BAND_QS]
+    months = orig.to_period("M")
+    bands, level = [], np.empty(len(orig), dtype=int)
+    for month in months.unique():
+        edges, Q = e24.band_table(*record, orig[months == month][0])
+        level[months == month] = np.digitize(env[months == month], edges)
+        bands.append({"month": str(month),
+                      **{f"q{q:02d}": np.round(Q[:, i], 4).tolist() for i, q in zip(qi, BAND_QS)}})
+    newest = Q[level[-1]]
     write("hindcast.json", {
         "generated_utc": now,
         "model": meta["model"],
         "origins": [t.strftime("%Y-%m-%d") for t in orig],
         "f107": np.round(P, 1).tolist(),
-        "band": [band[str(h)] for h in range(1, e24.HORIZON + 1)],
+        "level": level.tolist(),
+        "bands": bands,
+        "band": [{f"q{q:02d}": round(float(newest[i, h]), 5) for i, q in enumerate(e24.QS)} for h in range(e24.HORIZON)],
         "observed": observed((orig[0] - pd.Timedelta(days=60)).strftime("%Y-%m-%d")),
     })
     print(f"web views: forecast origin {fc.origin[0]}; hindcast {len(orig)} origins "
-          f"{orig[0].date()}..{orig[-1].date()}")
+          f"{orig[0].date()}..{orig[-1].date()}, {len(bands)} monthly bands")
 
 
 if __name__ == "__main__":

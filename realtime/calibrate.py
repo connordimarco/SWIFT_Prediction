@@ -1,43 +1,79 @@
 #!/usr/bin/env python3
-"""Calibrate the E24 uncertainty band -> models/band.json.
+"""Build the frozen part of the E24 error record -> models/error_record.npz.
 
-Residuals are log(observed / forecast) per lead over every origin from
-2024-01-01 (the untouched test era, cycle-25 maximum) whose 30-day truth is
-complete. Their quantiles (q05..q95) are stored per lead and applied
-multiplicatively at predict time. Note: in-sample on this era, no model
-selection happened here. Re-run after each data refresh to extend the record.
+The band of every issued forecast is taken from the model's earlier
+out-of-sample errors at a similar flux level (e24.band_quantiles). The models were
+fitted to 1947-2021, so their own errors there are not out-of-sample; this
+script makes honest ones:
+
+  * training years: out-of-fold. The years are cut into 3-year blocks dealt
+    round-robin into 5 folds; each fold is predicted by models refit on the
+    other four (minus 90 days either side of every held-out block, so no
+    input or target window overlaps it), with each lead's tree count fixed
+    at the frozen model's early-stopped value. Short interleaved blocks, not
+    five long ones, so every refit still sees the eras where the
+    active-region (1996->) and far-side (2010->) inputs exist.
+  * validation years (2022-2023): the frozen models' own forecasts.
+
+Errors are log(observed / forecast) per lead. The test era (2024->) is not
+stored: e24.error_record recomputes it from the frozen models at predict
+time. One-time, ~40 min on 10 cores; the frozen models are not touched.
 """
 
-import datetime as dt
-import json
 import os
+import time
 
+import lightgbm as lgb
 import numpy as np
-import pandas as pd
 
 import e24
+from e24 import common
+
+P = dict(e24.CFG44)
+P["n_jobs"] = int(os.environ.get("LGBM_THREADS", 10))
+FOLDS = 5
+BLOCK_YEARS = 3
+PURGE = e24.HIST + e24.HORIZON
 
 
 def main():
     df = e24.load_table()
     models, meta = e24.load_models()
-    orig = e24.valid_origins(df, "2024-01-01", "2099-12-31", need_truth=True)
-    X = e24.feature_rows(df, orig)
-    env = e24.envelope(df).loc[orig].to_numpy()
-    P = e24.to_obs(e24.predict_adj(models, X, env), orig)
-    obs = df["f107_obs"].to_numpy()
-    pos = df.index.get_indexer(orig)
-    Y = np.stack([obs[p + 1 : p + 1 + e24.HORIZON] for p in pos])
-    R = np.log(Y / P)
-    band = {str(h + 1): {f"q{q:02d}": round(float(np.percentile(R[:, h], q)), 5) for q in e24.QS} for h in range(e24.HORIZON)}
-    rmse = float(np.sqrt(np.mean((Y - P) ** 2)))
-    out = dict(kind="log-ratio quantiles of observed/forecast, per lead", n_origins=int(len(orig)),
-               origins=[str(orig[0].date()), str(orig[-1].date())], pooled_rmse_sfu=round(rmse, 2),
-               calibrated_at=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), band=band)
-    json.dump(out, open(os.path.join(e24.MODELS, "band.json"), "w"), indent=1)
-    w = [np.exp(band[str(h)]["q90"]) - np.exp(band[str(h)]["q10"]) for h in (1, 7, 14, 30)]
-    print(f"band from {len(orig)} origins {orig[0].date()}..{orig[-1].date()}; pooled RMSE {rmse:.2f} sfu; "
-          f"10-90 band width as a fraction of the forecast at leads 1/7/14/30: {np.round(w, 2).tolist()}")
+    best = meta["best_iteration"]
+    Xtr, ytr, otr, names = common.build_samples(df, "train47", required=e24.REQUIRED, extra=common.FS_COLS, flux=e24.FLUX)
+    assert names == e24.NAMES
+    env = e24.envelope(df)
+    dtr = env.loc[otr].to_numpy()
+    ok = np.isfinite(dtr) & (dtr > 0)
+    Xtr, ytr, otr, dtr = Xtr[ok], ytr[ok], otr[ok], dtr[ok]
+    fold = np.asarray(((otr.year - otr[0].year) // BLOCK_YEARS) % FOLDS)
+    day = np.asarray((otr - otr[0]).days)
+    print(f"train {Xtr.shape} ({otr[0].date()}..{otr[-1].date()}); {FOLDS} folds of {BLOCK_YEARS}-year blocks, purge {PURGE} d", flush=True)
+
+    oof = np.empty(ytr.shape)
+    Ytr = e24.observed(df, otr)
+    t0 = time.time()
+    for k in range(FOLDS):
+        te = fold == k
+        held = np.zeros(day.max() + 1)
+        held[day[te]] = 1
+        c = np.r_[0, np.cumsum(held)]
+        tr = ~te & (c[np.minimum(day + PURGE + 1, len(held))] - c[np.maximum(day - PURGE, 0)] == 0)
+        for h in range(e24.HORIZON):
+            m = lgb.LGBMRegressor(**dict(P, n_estimators=best[h])).fit(Xtr[tr], ytr[tr, h] / dtr[tr])
+            oof[te, h] = m.predict(Xtr[te]) * dtr[te]
+        err = e24.to_obs(oof[te], otr[te]) - Ytr[te]
+        print(f"fold {k + 1}/{FOLDS}: {int(te.sum())} held out, {int(tr.sum())} to fit; "
+              f"rmse lead 1 {np.sqrt(np.nanmean(err[:, 0] ** 2)):.2f}  lead 30 {np.sqrt(np.nanmean(err[:, -1] ** 2)):.2f} sfu  [{time.time() - t0:.0f}s]", flush=True)
+
+    ova = e24.valid_origins(df, "2022-01-01", "2023-12-31", need_truth=True)
+    Pva = e24.to_obs(e24.predict_adj(models, e24.feature_rows(df, ova), env.loc[ova].to_numpy()), ova)
+    times = otr.append(ova).to_numpy()
+    resid = np.log(np.vstack([Ytr, e24.observed(df, ova)]) / np.vstack([e24.to_obs(oof, otr), Pva]))
+    assert (np.diff(times) > np.timedelta64(0)).all() and times[-1] < np.datetime64(e24.TEST_START)
+    np.savez_compressed(e24.RECORD, times=times, resid=resid.astype(np.float32))
+    print(f"saved {len(times)} forecasts ({otr[0].date()}..{ova[-1].date()}) to {os.path.relpath(e24.RECORD, e24.ROOT)}; "
+          f"{int(np.isnan(resid).sum())} missing errors  [{time.time() - t0:.0f}s]")
 
 
 if __name__ == "__main__":

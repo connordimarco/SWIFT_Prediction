@@ -7,11 +7,12 @@
     build_samples on 50 random test origins: identical rows, identical
     predictions.
  4. Text-booster models (portable) agree with the joblib ones.
- 3. Band sanity: coverage of the q05-q95 / q10-q90 bands on the calibration
-    era (in-sample, so ~0.90 / ~0.80 by construction).
+ 3. Band check: every test-era forecast whose 30 days have been observed,
+    with the band it would have been issued with (from earlier forecasts
+    only): share of days inside the 90 / 80 / 50% bands. Out-of-sample, so
+    this is a real check; reported, not asserted (the years overlap heavily).
 """
 
-import json
 import os
 import sys
 
@@ -55,23 +56,16 @@ def main():
     print(f"4. text boosters vs joblib models: max |diff| {dt_:.4f} sfu")
     ok &= dt_ <= 0.011
 
-    bp = os.path.join(e24.MODELS, "band.json")
-    if os.path.exists(bp):
-        band = json.load(open(bp))
-        orig = e24.valid_origins(df, band["origins"][0], band["origins"][1], need_truth=True)
-        X = e24.feature_rows(df, orig)
-        P = e24.to_obs(e24.predict_adj(models, X, e24.envelope(df).loc[orig].to_numpy()), orig)
-        pos = df.index.get_indexer(orig)
-        Y = np.stack([df.f107_obs.to_numpy()[p + 1 : p + 1 + e24.HORIZON] for p in pos])
-        lo90 = np.array([np.exp(band["band"][str(h)]["q05"]) for h in range(1, 31)])
-        hi90 = np.array([np.exp(band["band"][str(h)]["q95"]) for h in range(1, 31)])
-        lo80 = np.array([np.exp(band["band"][str(h)]["q10"]) for h in range(1, 31)])
-        hi80 = np.array([np.exp(band["band"][str(h)]["q90"]) for h in range(1, 31)])
-        c90 = np.mean((Y >= P * lo90) & (Y <= P * hi90))
-        c80 = np.mean((Y >= P * lo80) & (Y <= P * hi80))
-        print(f"3. band on {len(orig)} calibration origins: 90% band covers {c90:.3f}, 80% band covers {c80:.3f}")
+    if os.path.exists(e24.RECORD):
+        times, R, level = e24.error_record(df, models)
+        te = times >= np.datetime64(e24.TEST_START)
+        Q = np.stack([e24.band_quantiles(times, R, level, t, lv) for t, lv in zip(times[te], level[te])])  # (n, len(QS), 30)
+        Rt, seen = R[te], np.isfinite(R[te])
+        inside = lambda lo, hi: float((((Rt >= Q[:, e24.QS.index(lo)]) & (Rt <= Q[:, e24.QS.index(hi)]))[seen]).mean())
+        print(f"3. band on {int(te.sum())} test-era origins, each with the band from earlier forecasts only: "
+              f"90% covers {inside(5, 95):.3f}, 80% covers {inside(10, 90):.3f}, 50% covers {inside(25, 75):.3f}")
     else:
-        print("3. no band.json yet (run calibrate.py)")
+        print("3. no error_record.npz yet (run calibrate.py)")
     print("ALL OK" if ok else "FAILED")
     sys.exit(0 if ok else 1)
 

@@ -16,8 +16,19 @@ the record of what was predicted when (CCMC Swift re-entry challenge entry).
   Test (2024-01 →, 882 origins): pooled RMSE 29.1 sfu, r 0.70, skill vs
   persistence +0.25; vs SWPC's 27-day outlook on 125 matched issues:
   28.6 vs 32.1 sfu pooled (−11%), 32.2 vs 37.3 on days ≥150 sfu (−14%).
-- Band: per-lead quantiles of log(observed/forecast) over all 2024→ origins,
-  applied multiplicatively (`models/band.json`). In-sample on that era.
+- Band: multiplicative, and set by how active the Sun is. Per lead, the
+  quantiles of log(observed/forecast) over every earlier out-of-sample
+  forecast issued at a similar 81-day flux level (the record is split into
+  sixths by level). Relative errors are several times larger at solar maximum
+  than at minimum, so one band for all levels is wrong at both ends. Checked
+  on 2024-01 → 2026-09 with each forecast's band built from earlier forecasts
+  only: the 90 / 80 / 50% bands hold 91.1 / 81.9 / 49.5% of days (90% band:
+  89 / 94 / 90% in 2024 / 2025 / 2026; 50% band: 43 / 54 / 53%). On
+  1947–2023, judging each year by a band fitted without it or its
+  neighbours: 89.7% and 49.9% on average, single years from 73% to 99% and
+  from 34% to 75% — a year is only a dozen independent 30-day stretches.
+  The band it replaced was fitted to 2024–2026 itself; held out, it gave
+  83–93% and 36–56% by year.
 
 ## Files
 
@@ -25,11 +36,11 @@ the record of what was predicted when (CCMC Swift re-entry challenge entry).
 |---|---|
 | `e24.py` | shared: feature layout, origin validity, model I/O, adj→obs |
 | `train.py` | one-time: fit + save the 30 boosters → `models/` (~45 min, 10 cores) |
-| `calibrate.py` | residual quantiles → `models/band.json` (rerun after refreshes) |
+| `calibrate.py` | one-time: honest (out-of-fold) forecast errors over 1947–2023 → `models/error_record.npz` (~40 min, 10 cores); the test era is added from the frozen models at predict time |
 | `refresh_data.sh` | daily: re-pull LISIRD/SILSO/SRS/far-side, rebuild `data/*.csv`, bridge the tail |
 | `bridge_tail.py` | fills the last days: SSN from SILSO EISN, F10.7 from SWPC if LISIRD lags |
 | `predict.py` | issue the forecast for the last usable origin (or a given date) |
-| `verify.py` | retrained == `model/out` predictions; live feature rows == training rows; band coverage |
+| `verify.py` | retrained == `model/out` predictions; live feature rows == training rows; out-of-sample band coverage |
 
 ## Daily run
 

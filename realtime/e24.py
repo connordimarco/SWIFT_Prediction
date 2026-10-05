@@ -9,6 +9,13 @@ aggregates; the AR/far-side families are optional-NaN), and target
 multiplied back by env81(t) and converted to observed flux at predict time.
 Everything here reuses model/common.py and model/single_model.py so the live feature row is
 built exactly as the training rows were.
+
+The band is multiplicative and depends on how active the Sun is: per lead,
+quantiles of log(observed / forecast) over every earlier out-of-sample
+forecast issued at a similar 81-day flux level (band_quantiles; calibrate.py
+builds the record). Relative errors are several times larger at solar
+maximum than at minimum, so a band that ignores the level is too wide in
+quiet years and too narrow in active ones.
 """
 
 import json
@@ -33,6 +40,10 @@ COLS = [FLUX if c == "f107_adj" else c for c in common.FEATURE_COLS] + list(comm
 NAMES = [f"{c}_lag{lag}" for c in COLS for lag in range(common.HIST - 1, -1, -1)]
 HIST, HORIZON = common.HIST, common.HORIZON
 QS = [5, 10, 25, 50, 75, 90, 95]
+RECORD = os.path.join(MODELS, "error_record.npz")
+TEST_START = "2024-01-01"  # first origin the models never saw in training or early stopping
+LEVEL_BINS = 6     # the record is split into sixths by 81-day flux level
+MIN_RECORD = 200   # fewest past forecasts a band may be built from
 
 
 def load_table():
@@ -102,6 +113,50 @@ def to_obs(P_adj, orig):
         tdates = pd.date_range(t + pd.Timedelta(days=1), periods=HORIZON)
         out[i] = common.adj_to_obs(P_adj[i], tdates)
     return out
+
+
+def observed(df, orig):
+    """(n, 30) observed flux at t+1..t+30 (NaN where not yet measured)."""
+    obs = df["f107_obs"].to_numpy()
+    pos = df.index.get_indexer(orig)
+    return np.stack([obs[p + 1 : p + 1 + HORIZON] for p in pos])
+
+
+def error_record(df, models):
+    """Every out-of-sample forecast error, in time order -> times (n,),
+    resid (n, 30) = log(observed / forecast), level (n,) = the 81-day mean
+    flux at each origin.
+
+    The part before TEST_START was frozen by calibrate.py (out-of-fold over
+    the training years, then the validation years). The test era is
+    recomputed here from the frozen models for every origin whose 30 days
+    have been observed, so the band keeps up with new data without retraining."""
+    z = np.load(RECORD)
+    orig = valid_origins(df, TEST_START, "2099-12-31", need_truth=True)
+    P = to_obs(predict_adj(models, feature_rows(df, orig), envelope(df).loc[orig].to_numpy()), orig)
+    times = np.concatenate([z["times"], orig.to_numpy()])
+    resid = np.vstack([z["resid"], np.log(observed(df, orig) / P)])
+    return times, resid, envelope(df).reindex(pd.DatetimeIndex(times)).to_numpy()
+
+
+def band_table(times, resid, level, t):
+    """Band quantiles for an origin t at every flux level -> edges (LEVEL_BINS - 1,),
+    Q (LEVEL_BINS, len(QS), 30). Built from every forecast issued up to
+    t - 30 days (the ones fully observed by t), split at the quantiles of
+    their 81-day flux level; bin b holds levels in [edges[b-1], edges[b])."""
+    times = np.asarray(times, dtype="datetime64[ns]")
+    i1 = np.searchsorted(times, (pd.Timestamp(t) - pd.Timedelta(days=HORIZON)).to_datetime64(), side="right")
+    assert i1 >= MIN_RECORD * LEVEL_BINS, f"no error record before {pd.Timestamp(t).date()} to build a band from"
+    edges = np.quantile(level[:i1], np.linspace(0, 1, LEVEL_BINS + 1)[1:-1])
+    bins = np.digitize(level[:i1], edges)
+    return edges, np.stack([np.nanpercentile(resid[:i1][bins == b], QS, axis=0) for b in range(LEVEL_BINS)])
+
+
+def band_quantiles(times, resid, level, t, level_t):
+    """(len(QS), 30) log-ratio quantiles for an origin t whose 81-day flux
+    level is level_t. Multiply the forecast by exp() of these for the band."""
+    edges, Q = band_table(times, resid, level, t)
+    return Q[np.digitize(level_t, edges)]
 
 
 def long_frame(orig, P_obs, col="pred_obs"):

@@ -10,7 +10,6 @@ per origin; an existing file for the same origin is NOT overwritten unless
 """
 
 import datetime as dt
-import json
 import os
 import sys
 
@@ -25,7 +24,6 @@ def main():
     force = "--force" in sys.argv
     df = e24.load_table()
     models, meta = e24.load_models()
-    band = json.load(open(os.path.join(e24.MODELS, "band.json")))["band"]
     usable = e24.valid_origins(df, "2000-01-01", "2099-12-31", need_truth=False)
     t = pd.Timestamp(args[0]) if args else usable[-1]
     if t not in usable:
@@ -35,9 +33,11 @@ def main():
     env = e24.envelope(df).loc[orig].to_numpy()
     P = e24.to_obs(e24.predict_adj(models, X, env), orig)[0]
     tdates = pd.date_range(t + pd.Timedelta(days=1), periods=e24.HORIZON)
+    # band: the model's earlier out-of-sample errors at this 81-day flux level
+    B = P * np.exp(e24.band_quantiles(*e24.error_record(df, models), t, env[0]))
     rows = []
     for h in range(e24.HORIZON):
-        q = {k: round(float(P[h] * np.exp(v)), 1) for k, v in band[str(h + 1)].items()}
+        q = {f"q{qq:02d}": round(float(B[i, h]), 1) for i, qq in enumerate(e24.QS)}
         rows.append(dict(origin=t.date(), lead=h + 1, target_date=tdates[h].date(), f107=round(float(P[h]), 1), **q))
     out = pd.DataFrame(rows)
     out["model"] = meta["model"]
