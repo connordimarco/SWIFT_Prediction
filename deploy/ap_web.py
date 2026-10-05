@@ -4,7 +4,9 @@
   forecast.json   observed daily Ap (last 183 days) + the newest issued Ap
                   forecast (point forecast and q05..q95) + every percentile
                   1..99 of that forecast (`percentiles`), for the Swift
-                  re-entry calculation's sampled paths
+                  re-entry calculation's sampled paths + every forecast
+                  issued so far (`issued`, from the archive in ap/forecasts/),
+                  for the page's live record
   hindcast.json   the forecast the frozen model gives from every origin since
                   2024-01-01 (data it was never trained or tuned on), computed
                   from today's data archive, + the band and the observed
@@ -17,6 +19,7 @@ the band of that month's first origin, as log-ratio quantiles: the page
 draws max((forecast + 1) * exp(q) - 1, 0), as shared.apply_band does.
 """
 import datetime as dt
+import glob
 import json
 import os
 import sys
@@ -40,6 +43,16 @@ def write(name, obj):
     with open(tmp, "w") as f:
         json.dump(obj, f, separators=(",", ":"))
     os.replace(tmp, os.path.join(OUT, name))
+
+
+def issued():
+    """Every Ap forecast issued so far (ap/forecasts/ap_<origin>.csv): origins and point forecasts."""
+    out = {"origins": [], "ap": []}
+    for path in sorted(glob.glob(os.path.join(S.FORECASTS, "ap_*.csv"))):
+        f = pd.read_csv(path)
+        out["origins"].append(str(f.origin[0]))
+        out["ap"].append(f.ap.round(1).tolist())
+    return out
 
 
 def observed(df, since):
@@ -71,6 +84,7 @@ def main():
                         for k in ["ap", "q05", "q10", "q25", "q50", "q75", "q90", "q95"]}},
         # percentiles.ap[i] is the forecast at percentile levels[i], one value per day
         "percentiles": {"levels": PCTS, "ap": np.round(pct, 1).tolist()},
+        "issued": issued(),
     })
 
     orig = S.valid_origins(df, HINDCAST_START, "2099-12-31", need_truth=False)

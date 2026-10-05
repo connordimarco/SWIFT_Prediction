@@ -5,6 +5,8 @@
                   + the newest issued forecast (point forecast and q05..q95)
                   + every percentile 1..99 of that forecast (`percentiles`),
                   for the Swift re-entry calculation's sampled paths
+                  + every forecast issued so far (`issued`, from the archive
+                  in realtime/forecasts/), for the page's live record
   hindcast.json   the forecast the frozen model gives from every origin since
                   2024-01-01 (data it was never trained or tuned on), computed
                   from today's data archive, + the band and the observed
@@ -20,6 +22,7 @@ per-lead layout, filled with the newest origin's band, for pages that have
 not switched yet.
 """
 import datetime as dt
+import glob
 import json
 import os
 import sys
@@ -43,6 +46,16 @@ def write(name, obj):
     with open(tmp, "w") as f:
         json.dump(obj, f, separators=(",", ":"))
     os.replace(tmp, os.path.join(OUT, name))
+
+
+def issued():
+    """Every forecast issued so far (realtime/forecasts/f107_e24_<origin>.csv): origins and point forecasts."""
+    out = {"origins": [], "f107": []}
+    for path in sorted(glob.glob(os.path.join(ROOT, "realtime", "forecasts", "f107_e24_*.csv"))):
+        f = pd.read_csv(path)
+        out["origins"].append(str(f.origin[0]))
+        out["f107"].append(f.f107.round(1).tolist())
+    return out
 
 
 def observed(since):
@@ -78,6 +91,7 @@ def main():
                         for k in ["f107", "q05", "q10", "q25", "q50", "q75", "q90", "q95"]}},
         # percentiles.f107[i] is the forecast at percentile levels[i], one value per day
         "percentiles": {"levels": PCTS, "f107": np.round(pct, 1).tolist()},
+        "issued": issued(),
     })
 
     orig = e24.valid_origins(df, HINDCAST_START, "2099-12-31", need_truth=False)
