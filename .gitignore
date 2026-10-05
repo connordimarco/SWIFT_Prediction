@@ -8,3 +8,4 @@ deploy/web/
 deploy/local.env
 deploy/daily.log
 deploy/.lock
+ap/out/*.log

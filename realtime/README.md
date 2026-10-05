@@ -46,7 +46,7 @@ aggregates forward-fill one day, `srs_present=0`).
 ## Deploying on a Linux box (e.g. solsticedisk, RHEL 8, python3.12)
 
 ```
-git clone https://github.com/connordimarco/F10.7_Prediction.git && cd F10.7_Prediction
+git clone https://github.com/connordimarco/SWIFT_Prediction.git && cd SWIFT_Prediction
 python3.12 -m venv env && env/bin/pip install -r requirements.txt
 rsync -a <mac>:Documents/Work/F10.7_Prediction/data/ data/ --exclude midl --exclude swpc_prf   # ~150 MB; or rebuild (far-side fetch ~4 h)
 sh realtime/refresh_data.sh && env/bin/python realtime/verify.py && env/bin/python realtime/predict.py
