@@ -30,6 +30,10 @@ nice $PY deploy/web_json.py; web=$?
 # SWPC 27-day outlook issues for the page's "Show SWPC"; on failure the
 # previous swpc.json stays in deploy/web/ and is re-published as is.
 nice $PY deploy/swpc_web.py; swpc=$?
+# NJIT and ADAPT-SIFT F10.7 forecasts for the page's "Show NJIT" and "Show
+# ADAPT-SIFT"; each run adds the newest issues to data/other_f107/. On a
+# failed fetch (other=1) the saved issues are published as they are.
+nice $PY deploy/other_f107_web.py; other=$?
 publish() {  # publish <dir> <dest> -> ok | FAIL
     timeout -k 10 120 rsync -a --timeout=45 --chmod=D755,F644 --exclude="*.tmp" \
         -e "ssh -o BatchMode=yes -o ConnectTimeout=10" \
@@ -51,5 +55,5 @@ ap_pub=skip
 if [ $ap_web -eq 0 ] && [ -n "${AP_PUBLISH_DEST:-}" ]; then
     ap_pub=$(publish deploy/web_ap/ "$AP_PUBLISH_DEST")
 fi
-echo "$(date -u +%FT%TZ) DONE refresh=$refresh predict=$predict web=$web swpc=$swpc pub=$pub latest=$(sed -n 2p realtime/forecasts/latest.csv | cut -d, -f1)" \
+echo "$(date -u +%FT%TZ) DONE refresh=$refresh predict=$predict web=$web swpc=$swpc other=$other pub=$pub latest=$(sed -n 2p realtime/forecasts/latest.csv | cut -d, -f1)" \
      "ap_data=$ap_data ap_predict=$ap_predict ap_web=$ap_web paths=$paths ap_pub=$ap_pub ap_latest=$(sed -n 2p ap/forecasts/latest.csv | cut -d, -f1)"
