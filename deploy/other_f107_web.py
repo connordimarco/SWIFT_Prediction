@@ -13,7 +13,6 @@ Swift re-entry runs.
   cu        CU Boulder (SWORD): 7-day F10.7 from B10.7, 3-day 3-hour ap
   esa       ESA SOLMAG short-term F10.7 and Ap (nominal)
   schatten  Schatten monthly F10.7 and Ap (nominal timing)
-  cycle     SWPC solar-cycle prediction, monthly F10.7
   esalong   ESA SOLMAG long-term, monthly F10.7 and Ap
 
 CU, ESA and Schatten come from the CCMC Swift challenge page. Most addresses
@@ -52,7 +51,6 @@ NJIT = "https://nature.njit.edu/solardb/api/db/f107_raw.php"
 SIFT = "https://gong.nso.edu/ftp/adapt/sift/sift_gong_f107_forecast_current.json"
 SIFT_ARCHIVE = "https://gong.nso.edu/ftp/adapt/sift/archive/{ym}/sift_f107_forecast_{ymd}.json"
 SWPC45 = "https://services.swpc.noaa.gov/text/45-day-forecast.txt"
-CYCLE = "https://services.swpc.noaa.gov/json/solar-cycle/predicted-solar-cycle.json"
 SWPC_FTP = "ftp.swpc.noaa.gov"
 CCMC = "https://ccmc.gsfc.nasa.gov/swift-challenge/index.php"
 MON = {m: i + 1 for i, m in enumerate("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split())}
@@ -71,7 +69,6 @@ NAMES = {
     "cu": "CU Boulder 7-day F10.7 (from B10.7) and 3-day 3-hour ap",
     "esa": "ESA SOLMAG short-term F10.7 and Ap (nominal)",
     "schatten": "Schatten monthly F10.7 and Ap (nominal timing)",
-    "cycle": "SWPC solar-cycle prediction, monthly F10.7",
     "esalong": "ESA SOLMAG long-term monthly F10.7 and Ap",
 }
 
@@ -230,10 +227,6 @@ def fetch_swpc3():
     ftp_get_new("/pub/forecasts/three_day/", three_day)
 
 
-def fetch_cycle():
-    save_raw("cycle", dt.date.today().strftime("%Y%m%d") + ".json", get(CYCLE))
-
-
 def page_dates(page):
     """The CCMC page's 'Updated' date of every file it lists -> {file name: 'YYYY-MM-DD'}."""
     text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", page)))
@@ -269,8 +262,6 @@ def fetch_ccmc():
             source, name = "schatten", posted_on.replace("-", "") + ".txt"
         elif area == "drivers" and parts[0] == "ADAPT_SIFT" and parts[-1] == "sift_gong_f107_forecast_current.txt":
             source, name = "sift_ccmc", parts[1] + ".txt"
-        elif area == "drivers" and parts[0] == "SWPC_Solar_Cycle" and parts[-1].endswith(".json"):
-            source, name = "cycle", parts[1] + ".json"
         elif area == "drivers" and parts[0] == "SWPC_45_Day" and parts[-1].endswith(".txt"):
             # renamed by its issue date once read
             source, name = "swpc45", None
@@ -470,17 +461,17 @@ def read_esa():
 
 
 def monthly_issues(versions, today):
-    """Monthly values -> one issue a day: each version [(first day, {(year, month): (f107, ap)})]
+    """Monthly values -> one issue a day: each version [(first day, {(year, month): (f107, ap)}, issued)]
     holds from its first day until the next version; the issue made on day d
     (origin d - 1) has the month's value on each of the next MAX_DAYS days."""
     out = {}
     versions = sorted(versions, key=lambda v: v[0])
-    for i, (first, months) in enumerate(versions):
+    for i, (first, months, issued) in enumerate(versions):
         last = versions[i + 1][0] if i + 1 < len(versions) else today + dt.timedelta(days=1)
         d = first
         while d < last:
             # the copy of day d could be had from d (and the version itself from `first`)
-            issue = {"issued": first.isoformat(), "available": d.isoformat(), "f107": {}, "ap": {}}
+            issue = {"issued": issued, "available": d.isoformat(), "f107": {}, "ap": {}}
             for k in range(MAX_DAYS):
                 t = d + dt.timedelta(days=k)
                 f107, ap = months.get((t.year, t.month), (None, None))
@@ -500,22 +491,8 @@ def read_schatten(today):
         months = {(int(y), int(m)): (float(f), float(a))
                   for m, y, f, a in re.findall(r"^ *(\d+) +(\d{4}) +([\d.]+) +[\d.]+ +[\d.]+ +([\d.]+)", txt, re.M)}
         if months:
-            versions.append((dt.datetime.strptime(name[:8], "%Y%m%d").date(), months))
-    return monthly_issues(versions, today)
-
-
-def read_cycle(today):
-    versions = []
-    for name, txt in raw_files("cycle"):
-        try:
-            rows = json.loads(txt)
-            months = {(int(r["time-tag"][:4]), int(r["time-tag"][5:7])): (float(r["predicted_f10.7"]), None)
-                      for r in rows}
-        except (ValueError, KeyError, TypeError):
-            continue
-        # one saved copy a day: keep only those that differ from the day before
-        if not versions or versions[-1][1] != months:
-            versions.append((dt.datetime.strptime(name[:8], "%Y%m%d").date(), months))
+            first = dt.datetime.strptime(name[:8], "%Y%m%d").date()
+            versions.append((first, months, first.isoformat()))
     return monthly_issues(versions, today)
 
 
@@ -531,8 +508,9 @@ def read_esalong(today):
         for row in re.findall(r"^ *(\d+) +(\d{4})((?: +-?[\d.]+){10})", txt, re.M):
             v = [float(x) for x in row[2].split()]
             months[(int(row[1]), int(row[0]))] = (v[3] if v[3] > 0 else v[2], v[8] if v[8] > 0 else v[7])
-        versions[dt.datetime.strptime(name[:8], "%Y%m%d").date()] = (update[0], months)
-    return monthly_issues([(first, months) for first, (_, months) in versions.items()], today)
+        issued = dt.date(int(update[1]), MON[update[2]], int(update[3])).isoformat()  # ESA's own 'Last Update'
+        versions[dt.datetime.strptime(name[:8], "%Y%m%d").date()] = (update[0], months, issued)
+    return monthly_issues([(first, months, issued) for first, (_, months, issued) in versions.items()], today)
 
 
 def as_lists(issues):
@@ -576,7 +554,7 @@ def main():
     njit, sift = load("njit.json"), load("sift.json")
     steps = [("NJIT", lambda: fetch_njit(njit)), ("ADAPT-SIFT", lambda: fetch_sift(sift)),
              ("SWPC 45-day", fetch_swpc45), ("SWPC 3-day", fetch_swpc3),
-             ("SWPC solar cycle", fetch_cycle), ("CCMC challenge page", fetch_ccmc)]
+             ("CCMC challenge page", fetch_ccmc)]
     if "--backfill" in args:
         steps.append(("archives", backfill))
     for name, step in steps:
@@ -590,7 +568,7 @@ def main():
 
     sources = {"njit": read_njit(njit), "sift": read_sift(sift), "swpc45": read_swpc45(),
                "swpc27": read_swpc27(), "swpc3": read_swpc3(), "cu": read_cu(), "esa": read_esa(),
-               "schatten": read_schatten(today), "cycle": read_cycle(today), "esalong": read_esalong(today)}
+               "schatten": read_schatten(today), "esalong": read_esalong(today)}
     nd, sd = sorted(njit), sorted(sift)
     doc = {"generated_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
            # the F10.7 chart's "Show NJIT" and "Show ADAPT-SIFT"
