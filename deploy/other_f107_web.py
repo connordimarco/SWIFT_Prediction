@@ -58,6 +58,7 @@ CCMC = "https://ccmc.gsfc.nasa.gov/swift-challenge/index.php"
 MON = {m: i + 1 for i, m in enumerate("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split())}
 MAX_DAYS = 60  # values kept per issue
 BACKFILL_FROM = dt.date(2026, 10, 5)  # the first Swift re-entry run
+KEEP_FROM = BACKFILL_FROM - dt.timedelta(days=1)  # issues from this origin on (the first run used them)
 # Kp in thirds (0, 0+, 1-, 1, ...) -> ap
 KP_TO_AP = [0, 2, 3, 4, 5, 6, 7, 9, 12, 15, 18, 22, 27, 32, 39, 48, 56, 67, 80, 94,
             111, 132, 154, 179, 207, 236, 300, 400]
@@ -214,13 +215,16 @@ def fetch_swpc3():
     def year(mm, dd):  # file names have no year: the newest MMDD is this year, a later one last year
         return today.year if (int(mm), int(dd)) <= (today.month, today.day) else today.year - 1
 
+    def wanted(mm, dd):
+        return dt.date(year(mm, dd), int(mm), int(dd)) >= KEEP_FROM
+
     def rsga(name):
         m = re.fullmatch(r"(\d{2})(\d{2})RSGA\.txt", name)
-        return ("rsga", f"{year(m[1], m[2])}{name}") if m else None
+        return ("rsga", f"{year(m[1], m[2])}{name}") if m and wanted(m[1], m[2]) else None
 
     def three_day(name):
         m = re.fullmatch(r"(\d{2})(\d{2})0030three_day_forecast\.txt", name)
-        return ("three_day", f"{year(m[1], m[2])}{m[1]}{m[2]}.txt") if m else None
+        return ("three_day", f"{year(m[1], m[2])}{m[1]}{m[2]}.txt") if m and wanted(m[1], m[2]) else None
 
     ftp_get_new("/pub/forecasts/RSGA/", rsga)
     ftp_get_new("/pub/forecasts/three_day/", three_day)
@@ -534,7 +538,7 @@ def read_esalong(today):
 def as_lists(issues):
     """{origin: issue} -> the web form: origins, and per issue the values for
     origin + 1, + 2, ... (null where missing), at most MAX_DAYS days."""
-    origins = sorted(issues)
+    origins = sorted(o for o in issues if o >= KEEP_FROM)
     doc = {"origins": [o.isoformat() for o in origins], "issued": [issues[o].get("issued", "") for o in origins],
            "available": [issues[o].get("available") or issues[o].get("issued", "")[:10] for o in origins]}
     for key in ("f107", "ap"):
