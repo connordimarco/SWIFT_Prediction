@@ -30,9 +30,11 @@ nice $PY deploy/web_json.py; web=$?
 # SWPC 27-day outlook issues for the page's "Show SWPC"; on failure the
 # previous swpc.json stays in deploy/web/ and is re-published as is.
 nice $PY deploy/swpc_web.py; swpc=$?
-# NJIT and ADAPT-SIFT F10.7 forecasts for the page's "Show NJIT" and "Show
-# ADAPT-SIFT"; each run adds the newest issues to data/other_f107/. On a
-# failed fetch (other=1) the saved issues are published as they are.
+# Other groups' F10.7 and Ap forecasts (SWPC 45-day and 3-day, NJIT,
+# ADAPT-SIFT, CU Boulder, ESA, Schatten, SWPC solar cycle) for the page and the
+# Swift re-entry runs; each run adds the newest issues to
+# data/other_f107/. On a failed fetch (other=1) the saved issues are published
+# as they are.
 nice $PY deploy/other_f107_web.py; other=$?
 publish() {  # publish <dir> <dest> -> ok | FAIL
     timeout -k 10 120 rsync -a --timeout=45 --chmod=D755,F644 --exclude="*.tmp" \
