@@ -13,7 +13,6 @@ Swift re-entry runs.
   cu        CU Boulder (SWORD): 7-day F10.7 from B10.7, 3-day 3-hour ap
   esa       ESA SOLMAG short-term F10.7 and Ap (nominal)
   schatten  Schatten monthly F10.7 and Ap (nominal timing)
-  esalong   ESA SOLMAG long-term, monthly F10.7 and Ap
 
 CU, ESA and Schatten come from the CCMC Swift challenge page. Most addresses
 keep no past issues, so every file fetched is saved under data/other_f107/raw/
@@ -69,7 +68,6 @@ NAMES = {
     "cu": "CU Boulder 7-day F10.7 (from B10.7) and 3-day 3-hour ap",
     "esa": "ESA SOLMAG short-term F10.7 and Ap (nominal)",
     "schatten": "Schatten monthly F10.7 and Ap (nominal timing)",
-    "esalong": "ESA SOLMAG long-term monthly F10.7 and Ap",
 }
 
 
@@ -251,9 +249,8 @@ def fetch_ccmc():
                 re.fullmatch(r"CU_SWORD_\d{8}_F10_B10_7day_predict\.txt", parts[-1])
                 or re.fullmatch(r"SWORD_ap_forecast_\d{8}T\d{4}\.csv", parts[-1])):
             source, name = "cu", parts[-1]
-        elif area == "drivers" and parts[0] == "ESA_SOLMAG" and parts[-1] in ("short_term.dat", "long_term.dat"):
-            source = "esa" if parts[-1] == "short_term.dat" else "esalong"
-            name = parts[1] + ".dat"
+        elif area == "drivers" and parts[0] == "ESA_SOLMAG" and parts[-1] == "short_term.dat":
+            source, name = "esa", parts[1] + ".dat"
         elif area == "drivers" and parts[0] == "Schatten" and parts[-1].endswith(".txt"):
             # no date inside the file or its path: name it by the date the page says it was posted
             posted_on = page_dates(page).get(parts[-1])
@@ -496,23 +493,6 @@ def read_schatten(today):
     return monthly_issues(versions, today)
 
 
-def read_esalong(today):
-    """Columns: month, year, sunspot obs, pre, F10.7 obs, pre, err, AA obs, pre, Ap obs, pre, err.
-    Each version (its 'Last Update') holds from the first CCMC copy of it."""
-    versions = {}
-    for name, txt in raw_files("esalong"):
-        update = re.search(r"Last Update: (\d{4}) (\w{3}) +(\d+)", txt)
-        if not update or update[0] in [v[0] for v in versions.values()]:
-            continue
-        months = {}
-        for row in re.findall(r"^ *(\d+) +(\d{4})((?: +-?[\d.]+){10})", txt, re.M):
-            v = [float(x) for x in row[2].split()]
-            months[(int(row[1]), int(row[0]))] = (v[3] if v[3] > 0 else v[2], v[8] if v[8] > 0 else v[7])
-        issued = dt.date(int(update[1]), MON[update[2]], int(update[3])).isoformat()  # ESA's own 'Last Update'
-        versions[dt.datetime.strptime(name[:8], "%Y%m%d").date()] = (update[0], months, issued)
-    return monthly_issues([(first, months, issued) for first, (_, months, issued) in versions.items()], today)
-
-
 def as_lists(issues):
     """{origin: issue} -> the web form: origins, and per issue the values for
     origin + 1, + 2, ... (null where missing), at most MAX_DAYS days."""
@@ -568,7 +548,7 @@ def main():
 
     sources = {"njit": read_njit(njit), "sift": read_sift(sift), "swpc45": read_swpc45(),
                "swpc27": read_swpc27(), "swpc3": read_swpc3(), "cu": read_cu(), "esa": read_esa(),
-               "schatten": read_schatten(today), "esalong": read_esalong(today)}
+               "schatten": read_schatten(today)}
     nd, sd = sorted(njit), sorted(sift)
     doc = {"generated_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
            # the F10.7 chart's "Show NJIT" and "Show ADAPT-SIFT"
