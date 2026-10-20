@@ -16,8 +16,9 @@ Swift re-entry runs.
 
 CU, ESA and Schatten come from the CCMC Swift challenge page. Most addresses
 keep no past issues, so every file fetched is saved under data/other_f107/raw/
-and the record builds up from the first fetch. --backfill also fetches the
-ADAPT-SIFT archive from 5 Oct 2026, the first Swift re-entry run.
+and the record builds up from the first fetch. (GONG blocks fast downloaders
+for hours, the far-side maps of the F10.7 model included: fetch only the one
+current ADAPT-SIFT file from it.)
 
 Every source is written in one form: "origins", the last day of data each issue
 could use, and per issue the daily "f107" and/or "ap" for origin + 1, + 2, ...
@@ -27,7 +28,7 @@ day each issue could first be had (CU's: the day CCMC posted it), so a re-entry
 run or a score for a given day uses only what was out by then. A failed fetch
 leaves the source as it was (exit 1).
 
-    python deploy/other_f107_web.py [--backfill] [--out FILE]
+    python deploy/other_f107_web.py [--out FILE]
 """
 import datetime as dt
 import ftplib
@@ -36,7 +37,6 @@ import json
 import os
 import re
 import sys
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -48,14 +48,12 @@ SWPC_JSON = os.path.join(ROOT, "deploy", "web", "swpc.json")
 OUT = os.path.join(ROOT, "deploy", "web", "other_f107.json")
 NJIT = "https://nature.njit.edu/solardb/api/db/f107_raw.php"
 SIFT = "https://gong.nso.edu/ftp/adapt/sift/sift_gong_f107_forecast_current.json"
-SIFT_ARCHIVE = "https://gong.nso.edu/ftp/adapt/sift/archive/{ym}/sift_f107_forecast_{ymd}.json"
 SWPC45 = "https://services.swpc.noaa.gov/text/45-day-forecast.txt"
 SWPC_FTP = "ftp.swpc.noaa.gov"
 CCMC = "https://ccmc.gsfc.nasa.gov/swift-challenge/index.php"
 MON = {m: i + 1 for i, m in enumerate("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split())}
 MAX_DAYS = 60  # values kept per issue
-BACKFILL_FROM = dt.date(2026, 10, 5)  # the first Swift re-entry run
-KEEP_FROM = BACKFILL_FROM - dt.timedelta(days=1)  # issues from this origin on (the first run used them)
+KEEP_FROM = dt.date(2026, 10, 4)  # issues from this origin on (the first Swift re-entry run, 5 Oct, used them)
 # Kp in thirds (0, 0+, 1-, 1, ...) -> ap
 KP_TO_AP = [0, 2, 3, 4, 5, 6, 7, 9, 12, 15, 18, 22, 27, 32, 39, 48, 56, 67, 80, 94,
             111, 132, 154, 179, 207, 236, 300, 400]
@@ -274,23 +272,6 @@ def fetch_ccmc():
         save_raw(source, name, data)
 
 
-def backfill():
-    """ADAPT-SIFT's daily archive files from BACKFILL_FROM on, one every few
-    seconds; stops at the first refusal (GONG blocks fast downloaders).
-    SWPC's FTP folders already reach back 75 days."""
-    d = BACKFILL_FROM
-    while d < dt.date.today():
-        name = d.strftime("%Y%m%d") + ".json"
-        if not have_raw("sift_archive", name):
-            try:
-                save_raw("sift_archive", name, get(SIFT_ARCHIVE.format(ym=d.strftime("%Y%m"), ymd=d.strftime("%Y%m%d"))))
-            except urllib.error.HTTPError as e:
-                print(f"  ADAPT-SIFT archive refused {d} ({e.code}); stopping")
-                return
-            time.sleep(5)
-        d += dt.timedelta(days=1)
-
-
 # ── reading the saved files: each source -> {origin date: issue} ──
 # an issue is {"issued": str, "f107": {date: v}, "ap": {date: v}, "ap3": {date: [8 values]}}
 
@@ -301,15 +282,10 @@ def read_njit(record):
 
 
 def read_sift(record):
-    """The live record, with CCMC's daily copies and the 2026 archive where the
-    record has no issue. The newest issue of UT day D (about 22 UT) has data
-    through D: origin D, and its value k is for D + k."""
+    """The live record, with CCMC's daily copies where the record has no issue.
+    The newest issue of UT day D (about 22 UT) has data through D: origin D,
+    and its value k is for D + k."""
     issues = {}
-    for _, txt in raw_files("sift_archive"):
-        try:
-            issues.update(sift_issues(json.loads(txt)))
-        except (ValueError, KeyError):
-            continue
     for _, txt in raw_files("sift_ccmc"):
         for d, issue in sift_text_issues(txt).items():
             if d not in issues or issue["issued"] > issues[d]["issued"]:
@@ -535,8 +511,6 @@ def main():
     steps = [("NJIT", lambda: fetch_njit(njit)), ("ADAPT-SIFT", lambda: fetch_sift(sift)),
              ("SWPC 45-day", fetch_swpc45), ("SWPC 3-day", fetch_swpc3),
              ("CCMC challenge page", fetch_ccmc)]
-    if "--backfill" in args:
-        steps.append(("archives", backfill))
     for name, step in steps:
         try:
             step()
