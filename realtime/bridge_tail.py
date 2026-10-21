@@ -4,6 +4,7 @@
   ssn   SILSO's definitive/provisional daily file lags by days to a month;
         days after its last entry are filled from SILSO EISN (estimated ISN,
         same v2 scale, updated daily through today). Flag ssn_filled = 2.
+        Each download is kept in data/eisn_saved.csv for when SILSO is down.
   f107  LISIRD is normally same-day (17/20/23 UT readings). If a recent day
         is missing there, SWPC's daily-solar-indices observed value is used
         (adjusted = observed x d_AU^2). Flag f107_filled = 2.
@@ -22,6 +23,7 @@ import e24
 from e24 import common
 
 DAILY = os.path.join(e24.ROOT, "data", "daily.csv")
+EISN_SAVED = os.path.join(e24.ROOT, "data", "eisn_saved.csv")
 EISN = "https://www.sidc.be/SILSO/DATA/EISN/EISN_current.csv"
 SWPC = "https://services.swpc.noaa.gov/text/daily-solar-indices.txt"
 
@@ -43,10 +45,24 @@ def main():
     ar_cols = [c for c in df.columns if c.startswith("ar_")]
     df[ar_cols] = df[ar_cols].ffill()
 
-    # --- SSN from EISN
-    e = pd.read_csv(io.StringIO(get(EISN)), header=None, usecols=[0, 1, 2, 4], names=["y", "m", "d", "eisn"])
-    e["date"] = pd.to_datetime(e[["y", "m", "d"]].rename(columns={"y": "year", "m": "month", "d": "day"}))
-    e = e.set_index("date")["eisn"].astype(float)
+    # --- SSN from EISN. Every good download is merged into data/eisn_saved.csv,
+    # and that copy is used when SILSO is down (21 Oct 2026: it was, and all
+    # of October's SSN went missing because nothing had been kept).
+    e = pd.Series(dtype=float, index=pd.DatetimeIndex([]))
+    if os.path.exists(EISN_SAVED):
+        e = pd.read_csv(EISN_SAVED, index_col="date", parse_dates=True)["eisn"]
+    eisn_ok = True
+    try:
+        new = pd.read_csv(io.StringIO(get(EISN)), header=None, usecols=[0, 1, 2, 4], names=["y", "m", "d", "eisn"])
+    except Exception as err:
+        eisn_ok = False
+        print(f"WARNING: EISN download failed ({err}); using the saved copy ({len(e)} days)")
+    if eisn_ok:
+        new["date"] = pd.to_datetime(new[["y", "m", "d"]].rename(columns={"y": "year", "m": "month", "d": "day"}))
+        new = new.set_index("date")["eisn"].astype(float)
+        new = new[new >= 0]  # -1 = no value yet
+        e = pd.concat([e[~e.index.isin(new.index)], new]).sort_index()
+        e.rename("eisn").to_csv(EISN_SAVED, index_label="date")
     need = df.index[df.ssn.isna() & (df.index >= today - pd.Timedelta(days=120))]
     fill = e.reindex(need).dropna()
     df.loc[fill.index, "ssn"] = fill.values
@@ -80,6 +96,8 @@ def main():
     print(f"daily.csv now {df.index[0].date()} -> {df.index[-1].date()}; last usable origin {last.date()}")
     if (today - last).days > 2:
         sys.exit(f"WARNING: last usable origin is {(today - last).days} days old")
+    if not eisn_ok:
+        sys.exit("WARNING: EISN download failed; used the saved copy")
 
 
 if __name__ == "__main__":

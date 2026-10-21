@@ -10,6 +10,7 @@ per origin; an existing file for the same origin is NOT overwritten unless
 """
 
 import datetime as dt
+import glob
 import os
 import sys
 
@@ -28,6 +29,12 @@ def main():
     t = pd.Timestamp(args[0]) if args else usable[-1]
     if t not in usable:
         sys.exit(f"{t.date()} is not a usable origin (60-day F10.7/SSN window incomplete); last usable: {usable[-1].date()}")
+    # never go back in time: if a feed is down the last usable day can fall back
+    # weeks (21 Oct 2026: SILSO down, no October SSN, origin fell to 30 Sep)
+    issued = sorted(os.path.basename(p)[9:19] for p in glob.glob(os.path.join(e24.FORECASTS, "f107_e24_*.csv")))
+    newest = issued[-1] if issued else ""
+    if not args and str(t.date()) < newest:
+        sys.exit(f"nothing new: last usable origin {t.date()} is older than the newest issued, {newest}")
     orig = pd.DatetimeIndex([t])
     X = e24.feature_rows(df, orig)
     env = e24.envelope(df).loc[orig].to_numpy()
@@ -47,7 +54,8 @@ def main():
     if os.path.exists(path) and not force:
         sys.exit(f"{path} exists (use --force to overwrite)")
     out.to_csv(path, index=False)
-    out.to_csv(os.path.join(e24.FORECASTS, "latest.csv"), index=False)
+    if str(t.date()) >= newest:  # a backfilled past origin leaves latest.csv alone
+        out.to_csv(os.path.join(e24.FORECASTS, "latest.csv"), index=False)
     last = df.loc[t]
     print(f"origin {t.date()}: F10.7 obs {last.f107_obs:.1f}, env81 {env[0]:.1f}, SSN {last.ssn:.0f}"
           f" (ssn_filled={int(last.ssn_filled)}, srs_present={int(last.srs_present)}, far-side {'ok' if np.isfinite(last.fs_n) else 'missing'})")

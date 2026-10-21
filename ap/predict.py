@@ -14,6 +14,7 @@ archive is a record of what was issued when.
 """
 
 import datetime as dt
+import glob
 import os
 import sys
 
@@ -32,6 +33,11 @@ def main():
     t = pd.Timestamp(args[0]) if args else usable[-1]
     if t not in usable:
         sys.exit(f"{t.date()} is not a usable origin (60-day ap window incomplete); last usable: {usable[-1].date()}")
+    # never go back in time: if a feed is down the last usable day can fall back
+    issued = sorted(os.path.basename(p)[3:13] for p in glob.glob(os.path.join(S.FORECASTS, "ap_*.csv")))
+    newest = issued[-1] if issued else ""
+    if not args and str(t.date()) < newest:
+        sys.exit(f"nothing new: last usable origin {t.date()} is older than the newest issued, {newest}")
     P = S.predict(models, S.feature_rows(df, pd.DatetimeIndex([t])))[0]
     times, resid = S.error_record(df, models)
     B = S.apply_band(P, S.band_quantiles(times, resid, t))
@@ -46,7 +52,8 @@ def main():
     if os.path.exists(path) and not force:
         sys.exit(f"{path} exists (use --force to overwrite)")
     out.to_csv(path, index=False)
-    out.to_csv(os.path.join(S.FORECASTS, "latest.csv"), index=False)
+    if str(t.date()) >= newest:  # a backfilled past origin leaves latest.csv alone
+        out.to_csv(os.path.join(S.FORECASTS, "latest.csv"), index=False)
     last = df.loc[t]
     n_band = int(np.sum((times > np.datetime64(t - pd.Timedelta(days=365.25 * S.WINDOW_YEARS))) & (times <= np.datetime64(t - pd.Timedelta(days=S.HORIZON)))))
     print(f"origin {t.date()}: Ap {last.Ap:.0f}, 3-hourly ap {[int(v) for v in last[S.AP3H]]}, SSN {last.ssn:.0f}, F10.7 {last.f107_obs:.1f}"
