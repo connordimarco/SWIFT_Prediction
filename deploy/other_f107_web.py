@@ -10,11 +10,16 @@ Swift re-entry runs.
   swpc27    SWPC 27-day outlook F10.7 and Ap, weekly (from swpc.json)
   swpc3     SWPC 3-day: F10.7 from the daily report (RSGA, 22 UT), 3-hour Kp
             from the 3-day forecast (00:30 UT issue)
-  cu        CU Boulder (SWORD): 7-day F10.7 from B10.7, 3-day 3-hour ap
+  cu        CU Boulder (SWORD): 7-day F10.7 from B10.7, 3-day 3-hour ap (F10.7
+            converted from 1 AU to Earth's distance, as the density model takes it)
   esa       ESA SOLMAG short-term F10.7 and Ap (nominal)
   schatten  Schatten monthly F10.7 and Ap (nominal timing)
 
-CU, ESA and Schatten come from the CCMC Swift challenge page. Most addresses
+CU's files come from the SFTP server CU uploads them to (from 27 Oct 2026; CCMC
+stopped posting them after 22 Oct) and from the CCMC Swift challenge page; ESA
+and Schatten come from the CCMC page. The server's address and password are in
+deploy/local.env (CU_SFTP=user@host:port, CU_SFTP_PASSWORD), its host key in
+data/other_f107/cu_sftp_known_hosts. Most addresses
 keep no past issues, so every file fetched is saved under data/other_f107/raw/
 and the record builds up from the first fetch. (GONG blocks fast downloaders
 for hours, the far-side maps of the F10.7 model included: fetch only the one
@@ -24,7 +29,7 @@ Every source is written in one form: "origins", the last day of data each issue
 could use, and per issue the daily "f107" and/or "ap" for origin + 1, + 2, ...
 (the layout of our own forecasts), plus "ap3", the 3-hour ap from origin + 1
 00 UT, where the source has it. Missing values are null. "available" is the
-day each issue could first be had (CU's: the day CCMC posted it), so a re-entry
+day each issue could first be had (CU's: the day it was uploaded or CCMC posted it), so a re-entry
 run or a score for a given day uses only what was out by then. A failed fetch
 leaves the source as it was (exit 1).
 
@@ -34,11 +39,14 @@ import datetime as dt
 import ftplib
 import html
 import json
+import math
 import os
 import re
 import sys
 import urllib.parse
 import urllib.request
+
+import paramiko
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 RECORD = os.path.join(ROOT, "data", "other_f107")
@@ -50,6 +58,7 @@ SIFT = "https://gong.nso.edu/ftp/adapt/sift/sift_gong_f107_forecast_current.json
 SWPC45 = "https://services.swpc.noaa.gov/text/45-day-forecast.txt"
 SWPC_FTP = "ftp.swpc.noaa.gov"
 CCMC = "https://ccmc.gsfc.nasa.gov/swift-challenge/index.php"
+CU_FILES = re.compile(r"CU_SWORD_\d{8}_F10_B10_7day_predict\.txt|SWORD_ap_forecast_\d{8}T\d{4}\.csv")
 MON = {m: i + 1 for i, m in enumerate("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split())}
 MAX_DAYS = 60  # values kept per issue
 KEEP_FROM = dt.date(2026, 10, 4)  # issues from this origin on (the first Swift re-entry run, 5 Oct, used them)
@@ -62,7 +71,7 @@ NAMES = {
     "swpc45": "SWPC 45-day F10.7 and Ap forecast",
     "swpc27": "SWPC 27-day outlook",
     "swpc3": "SWPC 3-day F10.7 (daily report) and Kp (3-day forecast)",
-    "cu": "CU Boulder 7-day F10.7 (from B10.7) and 3-day 3-hour ap",
+    "cu": "CU Boulder 7-day F10.7 (from B10.7, at Earth's distance) and 3-day 3-hour ap",
     "esa": "ESA SOLMAG short-term F10.7 and Ap (nominal)",
     "schatten": "Schatten monthly F10.7 and Ap (nominal timing)",
 }
@@ -222,6 +231,35 @@ def fetch_swpc3():
     ftp_get_new("/pub/forecasts/three_day/", three_day)
 
 
+def fetch_cu_sftp():
+    """CU's files in SWIFT/ on the SFTP server CU uploads them to. The day each
+    file was uploaded (UT) is kept in cu_posted.json."""
+    if not os.environ.get("CU_SFTP"):
+        print("CU SFTP: no CU_SFTP in deploy/local.env, skipped")
+        return
+    user, address = os.environ["CU_SFTP"].split("@")
+    host, port = address.split(":")
+    client = paramiko.SSHClient()
+    client.load_host_keys(os.path.join(RECORD, "cu_sftp_known_hosts"))  # an unknown host key is refused
+    client.connect(host, int(port), user, os.environ["CU_SFTP_PASSWORD"], timeout=60,
+                   allow_agent=False, look_for_keys=False)
+    posted = load("cu_posted.json")
+    try:
+        sftp = client.open_sftp()
+        for f in sftp.listdir_attr("SWIFT"):
+            if not CU_FILES.fullmatch(f.filename):
+                print(f"CU SFTP: {f.filename} is not a file we read, skipped")
+                continue
+            uploaded = dt.datetime.fromtimestamp(f.st_mtime, dt.timezone.utc).date().isoformat()
+            posted.setdefault(f.filename, uploaded)
+            if not have_raw("cu", f.filename):
+                with sftp.open("SWIFT/" + f.filename) as remote:
+                    save_raw("cu", f.filename, remote.read())
+    finally:
+        client.close()
+    save("cu_posted.json", posted)
+
+
 def page_dates(page):
     """The CCMC page's 'Updated' date of every file it lists -> {file name: 'YYYY-MM-DD'}."""
     text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", page)))
@@ -234,7 +272,7 @@ def fetch_ccmc():
     page = get(CCMC).decode(errors="replace")
     posted = load("cu_posted.json")
     for name, d in page_dates(page).items():
-        if name.startswith(("CU_SWORD_", "SWORD_ap_forecast_")):
+        if CU_FILES.fullmatch(name):
             posted.setdefault(name, d)
     save("cu_posted.json", posted)
     links = set(re.findall(r"swift_action=download&(?:amp;)?area=(drivers|submissions)&(?:amp;)?path=([^\"'&\s]+)",
@@ -242,9 +280,7 @@ def fetch_ccmc():
     for area, path in sorted(links):
         path = urllib.parse.unquote(path)
         parts = path.split("/")
-        if area == "submissions" and parts[0] == "SWORD" and (
-                re.fullmatch(r"CU_SWORD_\d{8}_F10_B10_7day_predict\.txt", parts[-1])
-                or re.fullmatch(r"SWORD_ap_forecast_\d{8}T\d{4}\.csv", parts[-1])):
+        if area == "submissions" and parts[0] == "SWORD" and CU_FILES.fullmatch(parts[-1]):
             source, name = "cu", parts[-1]
         elif area == "drivers" and parts[0] == "ESA_SOLMAG" and parts[-1] == "short_term.dat":
             source, name = "esa", parts[1] + ".dat"
@@ -372,9 +408,19 @@ def read_swpc3():
     return out
 
 
+def at_earth(d, f107):
+    """F10.7 adjusted to 1 AU -> at Earth's distance from the Sun on day d
+    (the same formula as model/common.py)."""
+    n = (dt.datetime(d.year, d.month, d.day) - dt.datetime(2000, 1, 1, 12)).total_seconds() / 86400
+    g = math.radians(357.529 + 0.98560028 * n)
+    r = 1.00014 - 0.01671 * math.cos(g) - 0.00014 * math.cos(2 * g)
+    return f107 / r ** 2
+
+
 def read_cu():
-    """B10.7 file 'Issue date: D' -> F10.7 for D + 1.. (origin D). ap files: the
-    newest issue made during UT day D (origin D), 3-hour bins from D + 1 00 UT."""
+    """B10.7 file 'Issue date: D' -> F10.7 for D + 1.. (origin D), at Earth's
+    distance if the file gives it adjusted to 1 AU. ap files: the newest issue
+    made during UT day D (origin D), 3-hour bins from D + 1 00 UT."""
     posted = load("cu_posted.json")
     out, ap_issues = {}, {}
     for name, txt in raw_files("cu"):
@@ -384,7 +430,10 @@ def read_cu():
                 continue
             rows = re.findall(r"^(\d{4}-\d{2}-\d{2}), *[\d.]+, *([\d.]+)", txt, re.M)
             issue = out.setdefault(day(m[1]), {"issued": m[1]})
-            issue["f107"] = {day(d): float(v) for d, v in rows}
+            if "adjusted F10" in txt:
+                issue["f107"] = {day(d): round(at_earth(day(d), float(v)), 1) for d, v in rows}
+            else:
+                issue["f107"] = {day(d): float(v) for d, v in rows}
             issue["available"] = max(issue.get("available", ""), posted.get(name, m[1]))
         else:
             rows = re.findall(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}),(\d{4}-\d{2}-\d{2} \d{2}):\d{2},[^,]+,[^,]+,([\d.]+)",
@@ -509,7 +558,7 @@ def main():
     njit, sift = load("njit.json"), load("sift.json")
     steps = [("NJIT", lambda: fetch_njit(njit)), ("ADAPT-SIFT", lambda: fetch_sift(sift)),
              ("SWPC 45-day", fetch_swpc45), ("SWPC 3-day", fetch_swpc3),
-             ("CCMC challenge page", fetch_ccmc)]
+             ("CU SFTP", fetch_cu_sftp), ("CCMC challenge page", fetch_ccmc)]
     for name, step in steps:
         try:
             step()
