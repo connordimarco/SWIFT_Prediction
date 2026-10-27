@@ -232,8 +232,9 @@ def fetch_swpc3():
 
 
 def fetch_cu_sftp():
-    """CU's files in SWIFT/ on the SFTP server CU uploads them to. The day each
-    file was uploaded (UT) is kept in cu_posted.json."""
+    """CU's files on the SFTP server CU uploads them to: F10.7 in SWIFT/, ap in
+    one SWORD_ap_forecasts_YYYYMMDD/ a day. The day each file was uploaded (UT)
+    is kept in cu_posted.json."""
     if not os.environ.get("CU_SFTP"):
         print("CU SFTP: no CU_SFTP in deploy/local.env, skipped")
         return
@@ -246,15 +247,17 @@ def fetch_cu_sftp():
     posted = load("cu_posted.json")
     try:
         sftp = client.open_sftp()
-        for f in sftp.listdir_attr("SWIFT"):
-            if not CU_FILES.fullmatch(f.filename):
-                print(f"CU SFTP: {f.filename} is not a file we read, skipped")
-                continue
-            uploaded = dt.datetime.fromtimestamp(f.st_mtime, dt.timezone.utc).date().isoformat()
-            posted.setdefault(f.filename, uploaded)
-            if not have_raw("cu", f.filename):
-                with sftp.open("SWIFT/" + f.filename) as remote:
-                    save_raw("cu", f.filename, remote.read())
+        folders = ["SWIFT"] + sorted(n for n in sftp.listdir() if re.fullmatch(r"SWORD_ap_forecasts_\d{8}", n))
+        for folder in folders:
+            for f in sftp.listdir_attr(folder):
+                if not CU_FILES.fullmatch(f.filename):
+                    print(f"CU SFTP: {folder}/{f.filename} is not a file we read, skipped")
+                    continue
+                uploaded = dt.datetime.fromtimestamp(f.st_mtime, dt.timezone.utc).date().isoformat()
+                posted.setdefault(f.filename, uploaded)
+                if not have_raw("cu", f.filename):
+                    with sftp.open(folder + "/" + f.filename) as remote:
+                        save_raw("cu", f.filename, remote.read())
     finally:
         client.close()
     save("cu_posted.json", posted)
