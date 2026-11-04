@@ -13,12 +13,12 @@ Swift re-entry runs.
   cu        CU Boulder (SWORD): 7-day F10.7 from B10.7, 3-day 3-hour ap (F10.7
             converted from 1 AU to Earth's distance, as the density model takes it)
   esa       ESA SOLMAG short-term F10.7 and Ap (nominal), daily ~04:45 UT
-  schatten  Schatten monthly F10.7 and Ap (nominal timing)
 
 CU's files come from the SFTP server CU uploads them to (from 27 Oct 2026; CCMC
 stopped posting them after 22 Oct) and from the CCMC Swift challenge page. ESA's
 file comes from ESA's own server (from 4 Nov 2026) and from the CCMC page's
-copies; Schatten's only from the CCMC page. The server's address and password are in
+copies. (The Schatten monthly forecast, CCMC-page only, was dropped on 4 Nov 2026;
+its files stay under raw/schatten/.) The server's address and password are in
 deploy/local.env (CU_SFTP=user@host:port, CU_SFTP_PASSWORD), its host key in
 data/other_f107/cu_sftp_known_hosts. Most addresses
 keep no past issues, so every file fetched is saved under data/other_f107/raw/
@@ -75,7 +75,6 @@ NAMES = {
     "swpc3": "SWPC 3-day F10.7 (daily report) and Kp (3-day forecast)",
     "cu": "CU Boulder 7-day F10.7 (from B10.7, at Earth's distance) and 3-day 3-hour ap",
     "esa": "ESA SOLMAG short-term F10.7 and Ap (nominal)",
-    "schatten": "Schatten monthly F10.7 and Ap (nominal timing)",
 }
 
 
@@ -284,7 +283,7 @@ def page_dates(page):
 
 
 def fetch_ccmc():
-    """CU's, ESA's and the Schatten files from the CCMC challenge page (all it lists).
+    """CU's and ESA's files from the CCMC challenge page (all it lists).
     The day CCMC posted each CU file is kept in cu_posted.json."""
     page = get(CCMC).decode(errors="replace")
     posted = load("cu_posted.json")
@@ -301,12 +300,6 @@ def fetch_ccmc():
             source, name = "cu", parts[-1]
         elif area == "drivers" and parts[0] == "ESA_SOLMAG" and parts[-1] == "short_term.dat":
             source, name = "esa", parts[1] + ".dat"
-        elif area == "drivers" and parts[0] == "Schatten" and parts[-1].endswith(".txt"):
-            # no date inside the file or its path: name it by the date the page says it was posted
-            posted_on = page_dates(page).get(parts[-1])
-            if not posted_on:
-                continue
-            source, name = "schatten", posted_on.replace("-", "") + ".txt"
         elif area == "drivers" and parts[0] == "ADAPT_SIFT" and parts[-1] == "sift_gong_f107_forecast_current.txt":
             source, name = "sift_ccmc", parts[1] + ".txt"
         elif area == "drivers" and parts[0] == "SWPC_45_Day" and parts[-1].endswith(".txt"):
@@ -500,42 +493,6 @@ def read_esa():
     return out
 
 
-def monthly_issues(versions, today):
-    """Monthly values -> one issue a day: each version [(first day, {(year, month): (f107, ap)}, issued)]
-    holds from its first day until the next version; the issue made on day d
-    (origin d - 1) has the month's value on each of the next MAX_DAYS days."""
-    out = {}
-    versions = sorted(versions, key=lambda v: v[0])
-    for i, (first, months, issued) in enumerate(versions):
-        last = versions[i + 1][0] if i + 1 < len(versions) else today + dt.timedelta(days=1)
-        d = first
-        while d < last:
-            # the copy of day d could be had from d (and the version itself from `first`)
-            issue = {"issued": issued, "available": d.isoformat(), "f107": {}, "ap": {}}
-            for k in range(MAX_DAYS):
-                t = d + dt.timedelta(days=k)
-                f107, ap = months.get((t.year, t.month), (None, None))
-                if f107 is not None:
-                    issue["f107"][t] = f107
-                if ap is not None:
-                    issue["ap"][t] = ap
-            out[d - dt.timedelta(days=1)] = issue
-            d += dt.timedelta(days=1)
-    return out
-
-
-def read_schatten(today):
-    """Columns: month, year, then nominal timing mean, +2 sigma, -2 sigma F10.7, ap, ..."""
-    versions = []
-    for name, txt in raw_files("schatten"):
-        months = {(int(y), int(m)): (float(f), float(a))
-                  for m, y, f, a in re.findall(r"^ *(\d+) +(\d{4}) +([\d.]+) +[\d.]+ +[\d.]+ +([\d.]+)", txt, re.M)}
-        if months:
-            first = dt.datetime.strptime(name[:8], "%Y%m%d").date()
-            versions.append((first, months, first.isoformat()))
-    return monthly_issues(versions, today)
-
-
 def as_lists(issues):
     """{origin: issue} -> the web form: origins, and per issue the values for
     origin + 1, + 2, ... (null where missing), at most MAX_DAYS days."""
@@ -571,7 +528,6 @@ def main():
     args = sys.argv[1:]
     out_path = args[args.index("--out") + 1] if "--out" in args else OUT
     os.makedirs(RECORD, exist_ok=True)
-    today = dt.date.today()
     failed = []
 
     njit, sift = load("njit.json"), load("sift.json")
@@ -588,8 +544,7 @@ def main():
     save("sift.json", sift)
 
     sources = {"njit": read_njit(njit), "sift": read_sift(sift), "swpc45": read_swpc45(),
-               "swpc27": read_swpc27(), "swpc3": read_swpc3(), "cu": read_cu(), "esa": read_esa(),
-               "schatten": read_schatten(today)}
+               "swpc27": read_swpc27(), "swpc3": read_swpc3(), "cu": read_cu(), "esa": read_esa()}
     nd, sd = sorted(njit), sorted(sift)
     doc = {"generated_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
            # the F10.7 chart's "Show NJIT" and "Show ADAPT-SIFT"
