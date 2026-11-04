@@ -12,12 +12,13 @@ Swift re-entry runs.
             from the 3-day forecast (00:30 UT issue)
   cu        CU Boulder (SWORD): 7-day F10.7 from B10.7, 3-day 3-hour ap (F10.7
             converted from 1 AU to Earth's distance, as the density model takes it)
-  esa       ESA SOLMAG short-term F10.7 and Ap (nominal)
+  esa       ESA SOLMAG short-term F10.7 and Ap (nominal), daily ~04:45 UT
   schatten  Schatten monthly F10.7 and Ap (nominal timing)
 
 CU's files come from the SFTP server CU uploads them to (from 27 Oct 2026; CCMC
-stopped posting them after 22 Oct) and from the CCMC Swift challenge page; ESA
-and Schatten come from the CCMC page. The server's address and password are in
+stopped posting them after 22 Oct) and from the CCMC Swift challenge page. ESA's
+file comes from ESA's own server (from 4 Nov 2026) and from the CCMC page's
+copies; Schatten's only from the CCMC page. The server's address and password are in
 deploy/local.env (CU_SFTP=user@host:port, CU_SFTP_PASSWORD), its host key in
 data/other_f107/cu_sftp_known_hosts. Most addresses
 keep no past issues, so every file fetched is saved under data/other_f107/raw/
@@ -58,6 +59,7 @@ SIFT = "https://gong.nso.edu/ftp/adapt/sift/sift_gong_f107_forecast_current.json
 SWPC45 = "https://services.swpc.noaa.gov/text/45-day-forecast.txt"
 SWPC_FTP = "ftp.swpc.noaa.gov"
 CCMC = "https://ccmc.gsfc.nasa.gov/swift-challenge/index.php"
+ESA = "https://static.sdo.esoc.esa.int/SOLMAG/short_term.dat"
 CU_FILES = re.compile(r"CU_SWORD_\d{8}_F10_B10_7day_predict\.txt|SWORD_ap_forecast_\d{8}T\d{4}\.csv")
 MON = {m: i + 1 for i, m in enumerate("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split())}
 MAX_DAYS = 60  # values kept per issue
@@ -263,6 +265,18 @@ def fetch_cu_sftp():
     save("cu_posted.json", posted)
 
 
+def fetch_esa():
+    """ESA's short_term.dat from ESA's own server, saved under raw/esa_direct/ by the
+    day its data run to (the day it was posted)."""
+    data = get(ESA)
+    upto = re.search(r"data up to (\d{2})/(\d{2})/(\d{4})", data.decode(errors="replace"))
+    if not upto:
+        raise ValueError("ESA: no 'data up to' line")
+    name = upto[3] + upto[2] + upto[1] + ".dat"
+    if not have_raw("esa_direct", name):
+        save_raw("esa_direct", name, data)
+
+
 def page_dates(page):
     """The CCMC page's 'Updated' date of every file it lists -> {file name: 'YYYY-MM-DD'}."""
     text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", page)))
@@ -462,9 +476,11 @@ def read_cu():
 
 def read_esa():
     """short_term.dat: observed days, then the 27-day+ forecast (nominal, +95%, -95%),
-    whose rows have no Kp ('0-0-0-...'). Origin = the day before the first forecast day."""
+    whose rows have no Kp ('0-0-0-...'). Origin = the day before the first forecast day.
+    The CCMC copies (raw/esa/, named by the day CCMC posted them) and the files from
+    ESA's server (raw/esa_direct/) together, the earliest copy of each issue kept."""
     out = {}
-    for name, txt in raw_files("esa"):
+    for name, txt in sorted(raw_files("esa") + raw_files("esa_direct")):
         block = txt.split("27d forecast -> nominal", 1)
         if len(block) < 2:
             continue
@@ -561,7 +577,7 @@ def main():
     njit, sift = load("njit.json"), load("sift.json")
     steps = [("NJIT", lambda: fetch_njit(njit)), ("ADAPT-SIFT", lambda: fetch_sift(sift)),
              ("SWPC 45-day", fetch_swpc45), ("SWPC 3-day", fetch_swpc3),
-             ("CU SFTP", fetch_cu_sftp), ("CCMC challenge page", fetch_ccmc)]
+             ("CU SFTP", fetch_cu_sftp), ("ESA", fetch_esa), ("CCMC challenge page", fetch_ccmc)]
     for name, step in steps:
         try:
             step()
