@@ -482,12 +482,14 @@ def read_esa():
         if not rows:
             continue
         days = [dt.date(int(y), int(m), int(d)) for d, m, y, _, _ in rows]
-        update = re.search(r"last update: (\d{2}-\w{3}-\d{4})", txt)
+        # issued = the file's 'data up to' day, the day ESA posts it (its 'last
+        # update' line carries the last observed day, one day earlier)
+        upto = re.search(r"data up to (\d{2})/(\d{2})/(\d{4})", txt)
         if days[0] - dt.timedelta(days=1) in out:
             continue  # a later copy of an issue already read (copies are read in date order)
         out[days[0] - dt.timedelta(days=1)] = {
             "available": f"{name[:4]}-{name[4:6]}-{name[6:8]}",
-            "issued": dt.datetime.strptime(update[1].title(), "%d-%b-%Y").date().isoformat() if update else "",
+            "issued": f"{upto[3]}-{upto[2]}-{upto[1]}" if upto else days[0].isoformat(),
             "f107": {t: float(r[3]) for t, r in zip(days, rows)},
             "ap": {t: float(r[4]) for t, r in zip(days, rows)}}
     return out
